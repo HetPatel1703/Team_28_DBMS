@@ -115,8 +115,3 @@ Use the following accounts to test the application immediately after populating 
 - **SQL Injection Prevention:** All user inputs are sanitized using `psycopg2` parameter placeholders. The application strictly avoids string concatenation in SQL queries.
 - **Authentication:** Passwords for newly created accounts are salted and hashed using `pbkdf2_sha256`. 
 - **Audit Logging:** Crucial actions (logins, profile updates, problem creation, and code submissions) are tracked in the database's `Audit_Log` table.
-
----
-<div align="center">
-  <i>Developed with ❤️ by Team 28</i>
-</div>
