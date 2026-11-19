@@ -234,12 +234,17 @@ def contests_page(user: dict):
             st.write(contest["description"] or "No description provided.")
             st.caption(str(contest["start_time"]) + " → " + str(contest["end_time"]) + " · " + contest["scoring_rule"])
             if contest["registered"]:
-                st.success("Registered · " + str(contest["completion_status"]))
-            elif st.button("Register", key="contest-" + str(contest["contest_id"])):
-                if safe(lambda: db.register_for_contest(user["username"], contest["contest_id"]), False):
-                    st.success("Registered successfully. Refresh the page to see the updated status.")
-                else:
-                    st.info("You are already registered.")
+                        st.success("Registered · " + str(contest["completion_status"]))
+            elif contest["contest_status"] == "Upcoming":
+                        if st.button("Register", key="contest-" + str(contest["contest_id"])):
+                            if safe(lambda: db.register_for_contest(user["username"], contest["contest_id"]), False):
+                                st.success("Registered successfully. Refresh the page to see the updated status.")
+                            else:
+                                st.info("You are already registered.")
+            elif contest["contest_status"] == "Running":
+                        st.info("This contest is currently running. Late registration is closed.")
+            else:
+                st.caption("Registration is closed for this contest.")
             data_table(safe(lambda: db.contest_problems(contest["contest_id"]), []) or [])
 
 
