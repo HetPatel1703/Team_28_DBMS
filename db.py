@@ -39,6 +39,30 @@ def _execute(sql: str, values: tuple = ()) -> int:
         return affected
 
 
+def _sync_sequence(cur, table: str, column: str) -> None:
+    """Keep a SERIAL/BIGSERIAL sequence ahead of the max existing id.
+
+    Demo/seed SQL often inserts explicit primary-key values which do NOT
+    advance the underlying sequence.  Without this, the next insert fails
+    with:
+        duplicate key value violates unique constraint "<table>_pkey"
+
+    This helper is called before every INSERT into a serial-backed table,
+    so the app is self-healing regardless of how the DB was seeded.
+    """
+    cur.execute("SELECT pg_get_serial_sequence(%s, %s)", (table, column))
+    row = cur.fetchone()
+    seq = row[0] if row else None
+    if not seq:
+        return
+    # is_called = false  ->  next nextval() returns exactly this value
+    cur.execute(
+        f"SELECT setval(%s::regclass, "
+        f"COALESCE((SELECT MAX({column}) FROM {table}), 0) + 1, false)",
+        (seq,),
+    )
+
+
 def test_connection() -> str:
     with get_connection() as conn, conn.cursor() as cur:
         cur.execute("SELECT version();")
@@ -106,8 +130,11 @@ def languages() -> list[dict[str, Any]]:
 
 
 def log_action(username: str, action: str, entity_type: str, entity_id: str | None, details: str) -> None:
-    _execute("""INSERT INTO Audit_Log (username, action_type, entity_type, entity_id, action_details)
-                VALUES (%s, %s, %s, %s, %s)""", (username, action, entity_type, entity_id, details))
+    with get_connection() as conn, conn.cursor() as cur:
+        _sync_sequence(cur, "audit_log", "log_id")
+        cur.execute("""INSERT INTO Audit_Log (username, action_type, entity_type, entity_id, action_details)
+                       VALUES (%s, %s, %s, %s, %s)""", (username, action, entity_type, entity_id, details))
+        conn.commit()
 
 
 # ---------- Problems, topics and submissions ----------
@@ -164,6 +191,7 @@ def problem_detail(problem_id: int) -> dict[str, Any] | None:
 def create_problem(title: str, description: str, difficulty: str, username: str, topic_ids: list[int],
                    constraints: list[str], samples: list[tuple[str, str]]) -> int:
     with get_connection() as conn, conn.cursor() as cur:
+        _sync_sequence(cur, "problem", "problem_id")
         cur.execute("""INSERT INTO Problem (title, description, difficulty_name, username, published_at)
                        VALUES (%s, %s, %s, %s, CURRENT_TIMESTAMP) RETURNING problem_id""",
                     (title.strip(), description.strip(), difficulty, username))
@@ -184,6 +212,8 @@ def create_problem(title: str, description: str, difficulty: str, username: str,
 
 def submit_solution(username: str, problem_id: int, language_id: int, code: str, verdict: str) -> int:
     with get_connection() as conn, conn.cursor() as cur:
+        _sync_sequence(cur, "submission",    "submission_id")
+        _sync_sequence(cur, "user_progress", "progress_id")
         cur.execute("""INSERT INTO Submission (username, problem_id, language_id, submitted_code, verdict,
                                                   execution_time, memory_used)
                        VALUES (%s, %s, %s, %s, %s, %s, %s) RETURNING submission_id""",
@@ -214,6 +244,7 @@ def recent_submissions(username: str, limit: int = 10) -> list[dict[str, Any]]:
                   JOIN Programming_Language pl ON pl.language_id = s.language_id
                   WHERE s.username = %s ORDER BY s.submission_time DESC LIMIT %s""", (username, limit))
 
+
 def update_problem(problem_id: int, title: str, description: str, difficulty: str) -> int:
     sql = """
         UPDATE Problem
@@ -225,6 +256,7 @@ def update_problem(problem_id: int, title: str, description: str, difficulty: st
         affected = cur.rowcount
         conn.commit()
         return affected
+
 
 def delete_problem(problem_id: int) -> int:
     sql = "DELETE FROM Problem WHERE problem_id = %s"
@@ -310,8 +342,10 @@ def discussions(problem_id: int | None = None) -> list[dict[str, Any]]:
 
 def create_discussion(username: str, problem_id: int, title: str, content: str) -> int:
     with get_connection() as conn, conn.cursor() as cur:
+        _sync_sequence(cur, "discussion", "discussion_id")
         cur.execute("""INSERT INTO Discussion (problem_id, username, discussion_title, content)
-                       VALUES (%s, %s, %s, %s) RETURNING discussion_id""", (problem_id, username, title.strip(), content.strip()))
+                       VALUES (%s, %s, %s, %s) RETURNING discussion_id""",
+                    (problem_id, username, title.strip(), content.strip()))
         discussion_id = cur.fetchone()[0]
         conn.commit()
     log_action(username, "CREATE_DISCUSSION", "Discussion", str(discussion_id), title.strip())
@@ -323,5 +357,8 @@ def comments(discussion_id: int) -> list[dict[str, Any]]:
 
 
 def create_comment(username: str, discussion_id: int, text: str) -> None:
-    _execute("INSERT INTO Comment (discussion_id, username, comment_text) VALUES (%s, %s, %s)",
-             (discussion_id, username, text.strip()))
+    with get_connection() as conn, conn.cursor() as cur:
+        _sync_sequence(cur, "comment", "comment_id")
+        cur.execute("INSERT INTO Comment (discussion_id, username, comment_text) VALUES (%s, %s, %s)",
+                    (discussion_id, username, text.strip()))
+        conn.commit()
